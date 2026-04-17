@@ -34,6 +34,7 @@
               inherit pname version;
               hash = "sha256-bmVURHS8jJ3YGCZb1DpMIva87MvV3JB80clUFTXJalg=";
             };
+            patches = [ ./patches/pymonzo-loop-oauth-callback.patch ];
             build-system = [ python.pkgs.flit-core ];
             dependencies = with python.pkgs; [
               authlib

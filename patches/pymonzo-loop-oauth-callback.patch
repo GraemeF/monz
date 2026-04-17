@@ -1,0 +1,21 @@
+Loop the OAuth callback server until the real callback arrives.
+
+Upstream calls server.handle_request() exactly once, so any stray request
+(browser favicon fetch, Safe Browsing preflight, DNS-over-HTTPS prefetch)
+that hits localhost:6600 before Monzo's redirect eats the one request and
+the server closes. The subsequent OAuth callback has nowhere to go and
+`authorize` exits without exchanging the code for a real user token.
+
+Keep handling requests until we see one whose URL contains `code=`.
+
+--- a/src/pymonzo/utils.py
++++ b/src/pymonzo/utils.py
+@@ -113,6 +113,7 @@ def get_authorization_response_url(host: str, port: int) -> str:
+     """
+     wsgi_app = WSGIApp()
+     with make_server(host, port, wsgi_app) as server:  # type: ignore
+-        server.handle_request()
++        while "code=" not in wsgi_app.last_request_uri:
++            server.handle_request()
+
+     return wsgi_app.last_request_uri
