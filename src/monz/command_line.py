@@ -198,11 +198,29 @@ def pots(monzo_api: MonzoAPI, account_id: Optional[str], show_deleted: bool) -> 
     "--num",
     "-n",
     type=int,
-    default=3,
-    help="Number of transactions to show.",
+    default=None,
+    help="Number of transactions to show. Defaults to 3, or all within a window.",
+)
+@click.option(
+    "--since",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]),
+    default=None,
+    help="Only show transactions at or after this time.",
+)
+@click.option(
+    "--before",
+    type=click.DateTime(formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]),
+    default=None,
+    help="Only show transactions before this time.",
 )
 @click.pass_obj
-def transactions(monzo_api: MonzoAPI, account_id: Optional[str], num: int) -> None:
+def transactions(
+    monzo_api: MonzoAPI,
+    account_id: Optional[str],
+    num: Optional[int],
+    since: Optional[datetime],
+    before: Optional[datetime],
+) -> None:
     """Show Monzo account transactions.
 
     You don't need to specify the account ID if you only have one (active) account.
@@ -210,22 +228,40 @@ def transactions(monzo_api: MonzoAPI, account_id: Optional[str], num: int) -> No
     Per [Monzo API docs] - you can only fetch all transactions within 5 minutes of
     authentication. After that, you can query your last 90 days.
 
+    Give `--since` and `--before` to query one explicit window. Monzo rejects a
+    range it considers too large, so a window is the only way to ask for more
+    than the most recent few transactions.
+
     [Monzo API docs]: https://docs.monzo.com/#list-transactions
     """
     try:
-        # By default, the API returns transactions from the last 30 days (I think).
-        # Because of that, query the api with an increasing `since` parameter until we
-        # get the desired number of transactions.
-        monzo_transactions: List[MonzoTransaction] = []
-        n = 0
-        while len(monzo_transactions) < num:
-            n += 1
-            since = datetime.today() - timedelta(days=30 * n)
-            monzo_transactions = monzo_api.transactions.list(
-                account_id=account_id,
-                expand_merchant=True,
-                since=since,
+        if since or before:
+            list_kwargs = {"account_id": account_id, "expand_merchant": True}
+            if since:
+                list_kwargs["since"] = since
+            if before:
+                list_kwargs["before"] = before
+
+            monzo_transactions: List[MonzoTransaction] = monzo_api.transactions.list(
+                **list_kwargs
             )
+        else:
+            if num is None:
+                num = 3
+
+            # By default, the API returns transactions from the last 30 days (I think).
+            # Because of that, query the api with an increasing `since` parameter until
+            # we get the desired number of transactions.
+            monzo_transactions = []
+            widenings = 0
+            while len(monzo_transactions) < num:
+                widenings += 1
+                widened_since = datetime.today() - timedelta(days=30 * widenings)
+                monzo_transactions = monzo_api.transactions.list(
+                    account_id=account_id,
+                    expand_merchant=True,
+                    since=widened_since,
+                )
     except PyMonzoError as e:
         raise click.UsageError(str(e)) from e
 

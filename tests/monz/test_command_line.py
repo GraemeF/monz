@@ -194,3 +194,51 @@ def test_transactions(
 
     # TODO: Test `--account_id` option
     # TODO: Test `--num` option
+
+
+def test_transactions_explicit_window(
+    mocker: MockerFixture,
+    cli_runner: CliRunner,
+    mocked_monzo_api: MagicMock,
+) -> None:
+    """Queries the given window once, without widening `since`."""
+    mocker.patch(
+        "monz.command_line.MonzoAPI",
+        autospec=True,
+        return_value=mocked_monzo_api,
+    )
+
+    result = cli_runner.invoke(
+        cli,
+        args=["transactions", "--since", "2026-08-12", "--before", "2026-08-13"],
+    )
+
+    assert result.exit_code == 0
+    mocked_monzo_api.transactions.list.assert_called_once_with(
+        account_id=None,
+        expand_merchant=True,
+        since=datetime(2026, 8, 12),
+        before=datetime(2026, 8, 13),
+    )
+
+
+def test_transactions_since_only(
+    mocker: MockerFixture,
+    cli_runner: CliRunner,
+    mocked_monzo_api: MagicMock,
+) -> None:
+    """Omits `before` when only `--since` is given."""
+    mocker.patch(
+        "monz.command_line.MonzoAPI",
+        autospec=True,
+        return_value=mocked_monzo_api,
+    )
+
+    result = cli_runner.invoke(cli, args=["transactions", "--since", "2026-08-12"])
+
+    assert result.exit_code == 0
+    mocked_monzo_api.transactions.list.assert_called_once_with(
+        account_id=None,
+        expand_merchant=True,
+        since=datetime(2026, 8, 12),
+    )
