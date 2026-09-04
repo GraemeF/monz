@@ -1,7 +1,7 @@
 """monz command line interface."""
 
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import click
 import rich_click
@@ -18,6 +18,10 @@ help_config = rich_click.RichHelpConfiguration(
 )
 
 rich_console = Console()
+
+# Monzo answers a transactions query one page at a time, 30 rows by default
+# and 100 at most.
+MONZO_MAX_PAGE_SIZE = 100
 
 # Options used in multiple places
 option_account_id = click.option(
@@ -192,6 +196,47 @@ def pots(monzo_api: MonzoAPI, account_id: Optional[str], show_deleted: bool) -> 
             rich_console.print()
 
 
+def _list_window(
+    monzo_api: MonzoAPI,
+    account_id: Optional[str],
+    since: Optional[datetime],
+    before: Optional[datetime],
+) -> List[MonzoTransaction]:
+    """Return every transaction in a window, following Monzo's cursor to its end.
+
+    Monzo hands back one page and says nothing about what is left behind it, so
+    the window is only complete once a page comes back short. It pages by taking
+    the last id seen as the next `since`.
+    """
+    window: List[MonzoTransaction] = []
+    cursor: Optional[Union[datetime, str]] = since
+
+    while True:
+        list_kwargs = {
+            "account_id": account_id,
+            "expand_merchant": True,
+            "limit": MONZO_MAX_PAGE_SIZE,
+        }
+        if cursor is not None:
+            list_kwargs["since"] = cursor
+        if before is not None:
+            list_kwargs["before"] = before
+
+        page = monzo_api.transactions.list(**list_kwargs)
+        window.extend(page)
+
+        if len(page) < MONZO_MAX_PAGE_SIZE:
+            return window
+
+        if page[-1].id == cursor:
+            raise click.ClickException(
+                f"Monzo's cursor did not advance past {cursor}, "
+                "so the window beyond it is unread."
+            )
+
+        cursor = page[-1].id
+
+
 @cli.command()
 @option_account_id
 @click.option(
@@ -234,17 +279,10 @@ def transactions(
 
     [Monzo API docs]: https://docs.monzo.com/#list-transactions
     """
+    monzo_transactions: List[MonzoTransaction]
     try:
         if since or before:
-            list_kwargs = {"account_id": account_id, "expand_merchant": True}
-            if since:
-                list_kwargs["since"] = since
-            if before:
-                list_kwargs["before"] = before
-
-            monzo_transactions: List[MonzoTransaction] = monzo_api.transactions.list(
-                **list_kwargs
-            )
+            monzo_transactions = _list_window(monzo_api, account_id, since, before)
         else:
             if num is None:
                 num = 3

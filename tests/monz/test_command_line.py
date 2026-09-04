@@ -7,8 +7,9 @@ from click.testing import CliRunner
 from pytest_mock import MockerFixture
 from time_machine import TimeMachineFixture
 
-from monz.command_line import cli
+from monz.command_line import MONZO_MAX_PAGE_SIZE, cli
 
+from .factories import MonzoTransactionFactory
 from .utils import renderable_to_str
 
 
@@ -217,6 +218,7 @@ def test_transactions_explicit_window(
     mocked_monzo_api.transactions.list.assert_called_once_with(
         account_id=None,
         expand_merchant=True,
+        limit=MONZO_MAX_PAGE_SIZE,
         since=datetime(2026, 8, 12),
         before=datetime(2026, 8, 13),
     )
@@ -240,5 +242,70 @@ def test_transactions_since_only(
     mocked_monzo_api.transactions.list.assert_called_once_with(
         account_id=None,
         expand_merchant=True,
+        limit=MONZO_MAX_PAGE_SIZE,
         since=datetime(2026, 8, 12),
     )
+
+
+def test_transactions_window_pages_past_the_first_page(
+    mocker: MockerFixture,
+    cli_runner: CliRunner,
+    mocked_monzo_api: MagicMock,
+) -> None:
+    """Follows the cursor until a short page ends the window."""
+    mocker.patch(
+        "monz.command_line.MonzoAPI",
+        autospec=True,
+        return_value=mocked_monzo_api,
+    )
+
+    first_page = MonzoTransactionFactory.batch(MONZO_MAX_PAGE_SIZE)
+    last_page = MonzoTransactionFactory.batch(2)
+    mocked_monzo_api.transactions.list.side_effect = [first_page, last_page]
+
+    result = cli_runner.invoke(
+        cli,
+        args=["transactions", "--since", "2026-07-01", "--before", "2026-09-04"],
+    )
+
+    assert result.exit_code == 0
+    assert mocked_monzo_api.transactions.list.call_args_list == [
+        mocker.call(
+            account_id=None,
+            expand_merchant=True,
+            limit=MONZO_MAX_PAGE_SIZE,
+            since=datetime(2026, 7, 1),
+            before=datetime(2026, 9, 4),
+        ),
+        mocker.call(
+            account_id=None,
+            expand_merchant=True,
+            limit=MONZO_MAX_PAGE_SIZE,
+            since=first_page[-1].id,
+            before=datetime(2026, 9, 4),
+        ),
+    ]
+
+    for transaction in last_page + first_page[:1]:
+        assert renderable_to_str(transaction) in result.output
+
+
+def test_transactions_window_fails_when_the_cursor_stalls(
+    mocker: MockerFixture,
+    cli_runner: CliRunner,
+    mocked_monzo_api: MagicMock,
+) -> None:
+    """Refuses to return a window the cursor stopped advancing through."""
+    mocker.patch(
+        "monz.command_line.MonzoAPI",
+        autospec=True,
+        return_value=mocked_monzo_api,
+    )
+
+    page = MonzoTransactionFactory.batch(MONZO_MAX_PAGE_SIZE)
+    mocked_monzo_api.transactions.list.side_effect = [page, page]
+
+    result = cli_runner.invoke(cli, args=["transactions", "--since", "2026-07-01"])
+
+    assert result.exit_code != 0
+    assert "did not advance" in result.output

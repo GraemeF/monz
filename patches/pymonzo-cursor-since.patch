@@ -1,0 +1,53 @@
+Let `since` carry a transaction id, so a window can be paged.
+
+Monzo caps a page of transactions at 30 by default and 100 at most, and
+pages by passing the last id seen back as `since` (docs.monzo.com,
+Pagination). Upstream types `since` as a datetime and unconditionally
+calls `strftime` on it, so the cursor form of the parameter is
+unreachable and any window wider than one page comes back truncated.
+
+Format a datetime as before, and pass a string through untouched.
+
+--- a/src/pymonzo/transactions/resources.py
++++ b/src/pymonzo/transactions/resources.py
+@@ -1,7 +1,7 @@
+ """Monzo API 'transactions' resource."""
+ 
+ from datetime import datetime
+-from typing import Dict, List, Optional
++from typing import Dict, List, Optional, Union
+ 
+ from pymonzo.resources import BaseResource
+ from pymonzo.transactions.schemas import MonzoTransaction
+@@ -75,7 +75,7 @@
+         account_id: Optional[str] = None,
+         *,
+         expand_merchant: bool = False,
+-        since: Optional[datetime] = None,
++        since: Optional[Union[datetime, str]] = None,
+         before: Optional[datetime] = None,
+         limit: Optional[int] = None,
+     ) -> List[MonzoTransaction]:
+@@ -91,7 +91,8 @@
+             account_id: The ID of the account. Can be omitted if user has only one
+                 active account.
+             expand_merchant: Whether to return expanded merchant information.
+-            since: Filter transactions by start time.
++            since: Filter transactions by start time, or the id of the
++                transaction to page on from.
+             before: Filter transactions by end time.
+             limit: Limits the number of results per-page. Maximum: 100.
+ 
+@@ -112,7 +113,11 @@
+             params["expand[]"] = "merchant"
+ 
+         if since:
+-            params["since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
++            params["since"] = (
++                since.strftime("%Y-%m-%dT%H:%M:%SZ")
++                if isinstance(since, datetime)
++                else since
++            )
+ 
+         if before:
+             params["before"] = before.strftime("%Y-%m-%dT%H:%M:%SZ")
